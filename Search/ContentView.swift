@@ -88,20 +88,12 @@ final class GithubSearchRequest: ObservableObject {
             .flatMap(queryURL)
             .flatMap(dataTask)
             .receive(on: RunLoop.main)
-            .mapError { err -> Error in
+            .catch { err -> Just<SearchResult> in
                 print("err: \(err)")
                 self.error = ErrorMessage(string: err.localizedDescription)
-                return err
+                return Just(SearchResult(totalCount: 0, incompleteResults: false, items: []))
             }
-            .replaceError(with: SearchResult(totalCount: 0, incompleteResults: false, items: []))
-            .sink(receiveCompletion: { result in
-                switch result {
-                    case .finished:
-                        break
-                    case let .failure(error):
-                        print("error: \(error.localizedDescription)")
-                }
-            }, receiveValue: { value in
+            .sink(receiveValue: { value in
                 print(value)
                 self.results = value.items.map { $0.fullName }
             })
@@ -117,6 +109,7 @@ struct ContentView: View {
             HStack {
                 Image(systemName: "magnifyingglass")
                 TextField("Type to search", text: $ghSearch.query)
+                    .autocapitalization(.none)
             }
             .padding(EdgeInsets(top: 8, leading: 6, bottom: 8, trailing: 6))
             .foregroundColor(.secondary)
