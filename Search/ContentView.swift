@@ -27,12 +27,12 @@ enum SearchError: Error {
     case decodingError(String)
 }
 
-let queryURL: (String) -> URL? = { query in
+func buildURL(query: String) -> URL? {
     guard !query.isEmpty else { return nil }
     return URL(string: "https://api.github.com/search/repositories?q=\(query)")
 }
 
-let dataTask: (URL) -> AnyPublisher<SearchResult, Error> = { url in
+func runDataTask(url: URL) -> AnyPublisher<SearchResult, Error> {
     let decoder = JSONDecoder()
     decoder.keyDecodingStrategy = .convertFromSnakeCase
     return URLSession.shared.dataTaskPublisher(for: url)
@@ -66,8 +66,8 @@ func createRequestPipeline(
         .mapError { _ in SearchError.publisherError }
         .debounce(for: .seconds(debounceDelay), scheduler: RunLoop.main)
         .removeDuplicates()
-        .compactMap(queryURL)
-        .flatMap(dataTask)
+        .compactMap(buildURL)
+        .flatMap(runDataTask)
         .receive(on: RunLoop.main)
         .catch { err -> Just<SearchResult> in
             errorHandler(err)
