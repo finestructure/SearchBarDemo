@@ -63,6 +63,8 @@ final class GithubSearchRequest: ObservableObject {
         didSet { fetch() }
     }
     @Published var results = [String]()
+    @Published var error: Error? = nil
+    @Published var hasError: Bool = false
 
     var debounceDelay: Double
 
@@ -73,13 +75,23 @@ final class GithubSearchRequest: ObservableObject {
     }
 
     private func fetch() {
+        self.error = nil
+        self.hasError = false
         let req = $query
+            .print()
             .mapError { _ in SearchError.publisherError }
             .removeDuplicates()
             .debounce(for: .seconds(debounceDelay), scheduler: RunLoop.main)
             .flatMap(queryURL)
             .flatMap(dataTask)
             .receive(on: RunLoop.main)
+            .mapError { err -> Error in
+                print("err: \(err)")
+                self.error = err
+                self.hasError = true
+                return err
+            }
+            .replaceError(with: SearchResult(totalCount: 0, incompleteResults: false, items: []))
             .sink(receiveCompletion: { result in
                 switch result {
                     case .finished:
@@ -117,6 +129,9 @@ struct ContentView: View {
             .navigationBarTitle(Text("Search Github"))
         }
         .padding()
+        .alert(isPresented: $ghSearch.hasError) {
+            Alert(title: Text("Error"), message: Text("\(ghSearch.error!.localizedDescription)"), dismissButton: .default(Text("OK")))
+        }
     }
 }
 
