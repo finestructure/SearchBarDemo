@@ -57,14 +57,18 @@ let dataTask: (URL) -> AnyPublisher<SearchResult, Error> = { url in
     .eraseToAnyPublisher()
 }
 
+struct ErrorMessage: Identifiable {
+    var id: String { string }
+    let string: String
+}
+
 // https://stackoverflow.com/questions/56879734/convert-a-state-into-a-publisher
 final class GithubSearchRequest: ObservableObject {
     @Published var query: String = "" {
         didSet { fetch() }
     }
     @Published var results = [String]()
-    @Published var error: Error? = nil
-    @Published var hasError: Bool = false
+    @Published var error: ErrorMessage? = nil
 
     var debounceDelay: Double
 
@@ -76,7 +80,6 @@ final class GithubSearchRequest: ObservableObject {
 
     private func fetch() {
         self.error = nil
-        self.hasError = false
         let req = $query
             .print()
             .mapError { _ in SearchError.publisherError }
@@ -87,8 +90,7 @@ final class GithubSearchRequest: ObservableObject {
             .receive(on: RunLoop.main)
             .mapError { err -> Error in
                 print("err: \(err)")
-                self.error = err
-                self.hasError = true
+                self.error = ErrorMessage(string: err.localizedDescription)
                 return err
             }
             .replaceError(with: SearchResult(totalCount: 0, incompleteResults: false, items: []))
@@ -129,8 +131,8 @@ struct ContentView: View {
             .navigationBarTitle(Text("Search Github"))
         }
         .padding()
-        .alert(isPresented: $ghSearch.hasError) {
-            Alert(title: Text("Error"), message: Text("\(ghSearch.error!.localizedDescription)"), dismissButton: .default(Text("OK")))
+        .alert(item: $ghSearch.error) { error in
+            Alert(title: Text("Error"), message: Text(error.string), dismissButton: .default(Text("OK")))
         }
     }
 }
