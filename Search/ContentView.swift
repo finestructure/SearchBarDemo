@@ -23,9 +23,8 @@ struct SearchResult: Decodable {
 
 enum SearchError: Error {
     case publisherError
-    case invalidURL
     case invalidServerResponse
-    case decodingError
+    case decodingError(String)
 }
 
 let queryURL: (String) -> URL? = { query in
@@ -45,8 +44,8 @@ let dataTask: (URL) -> AnyPublisher<SearchResult, Error> = { url in
             return data
     }
     .decode(type: SearchResult.self, decoder: decoder)
-    .mapError { _ in
-        SearchError.decodingError
+    .mapError { err in
+        SearchError.decodingError(err.localizedDescription)
     }
     .eraseToAnyPublisher()
 }
@@ -56,49 +55,57 @@ struct ErrorMessage: Identifiable {
     let string: String
 }
 
+func createRequestPipeline(
+    debounceDelay: Double = 0.8,
+    query: Published<String>.Publisher,
+    errorHandler: @escaping (Error) -> Void,
+    sink: @escaping (SearchResult) -> Void) -> AnyCancellable {
+
+    let p = query
+        .print("initial")
+        .mapError { _ in SearchError.publisherError }
+        .debounce(for: .seconds(debounceDelay), scheduler: RunLoop.main)
+        .removeDuplicates()
+        .compactMap(queryURL)
+        .flatMap(dataTask)
+        .receive(on: RunLoop.main)
+        .catch { err -> Just<SearchResult> in
+            errorHandler(err)
+            return Just(SearchResult(totalCount: 0, incompleteResults: false, items: []))
+        }
+        .sink(receiveValue: sink)
+    return p
+}
+
 final class GithubSearchRequest: ObservableObject {
     @Published var query: String = ""
     @Published var results = [String]()
     @Published var error: ErrorMessage? = nil
 
-    var debounceDelay: Double
-
     private var requestPipeline: AnyCancellable? = nil
 
-    init(debounceDelay: Double = 0.5) {
-        self.debounceDelay = debounceDelay
-        createRequestPipeline()
-    }
-
-    private func createRequestPipeline() {
-        requestPipeline = $query
-            .print("initial")
-            .mapError { _ in SearchError.publisherError }
-            .debounce(for: .seconds(debounceDelay), scheduler: RunLoop.main)
-            .removeDuplicates()
-            .compactMap(queryURL)
-            .flatMap(dataTask)
-            .receive(on: RunLoop.main)
-            .catch { [weak self] err -> Just<SearchResult> in
+    init() {
+        self.requestPipeline = createRequestPipeline(
+            query: $query,
+            errorHandler: { [weak self] err in
                 print("err: \(err)")
                 self?.error = ErrorMessage(string: err.localizedDescription)
-                return Just(SearchResult(totalCount: 0, incompleteResults: false, items: []))
-            }
-            .sink(receiveValue: { [weak self] value in
-                print("✅: \(value)")
-                self?.results = value.items.map { $0.fullName }
-            })
+            },
+            sink: { [weak self] result in
+                print("✅: \(result)")
+                self?.results = result.items.map { $0.fullName }
+        })
     }
 }
 
 struct ContentView: View {
-    @ObservedObject var ghSearch = GithubSearchRequest(debounceDelay: 0.8)
+    @ObservedObject var searchRequest = GithubSearchRequest()
 
     var body: some View {
         VStack {
             HStack {
                 Image(systemName: "magnifyingglass")
-                TextField("Type to search", text: $ghSearch.query)
+                TextField("Type to search", text: $searchRequest.query)
                     .autocapitalization(.none)
             }
             .padding(EdgeInsets(top: 8, leading: 6, bottom: 8, trailing: 6))
@@ -107,14 +114,14 @@ struct ContentView: View {
             .cornerRadius(8)
 
             List {
-                ForEach(ghSearch.results, id: \.self) {
+                ForEach(searchRequest.results, id: \.self) {
                     Text($0)
                 }
             }
             .navigationBarTitle(Text("Search Github"))
         }
         .padding()
-        .alert(item: $ghSearch.error) { error in
+        .alert(item: $searchRequest.error) { error in
             Alert(title: Text("Error"), message: Text(error.string), dismissButton: .default(Text("OK")))
         }
     }
