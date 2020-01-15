@@ -28,15 +28,9 @@ enum SearchError: Error {
     case decodingError
 }
 
-let queryURL: (String) -> AnyPublisher<URL, Error> = { query in
-    Just(query)
-        .tryMap { query -> URL in
-            guard let url = URL(string: "https://api.github.com/search/repositories?q=\(query)") else {
-                throw SearchError.invalidURL
-            }
-            return url
-    }
-        .eraseToAnyPublisher()
+let queryURL: (String) -> URL? = { query in
+    guard !query.isEmpty else { return nil }
+    return URL(string: "https://api.github.com/search/repositories?q=\(query)")
 }
 
 let dataTask: (URL) -> AnyPublisher<SearchResult, Error> = { url in
@@ -62,42 +56,38 @@ struct ErrorMessage: Identifiable {
     let string: String
 }
 
-// https://stackoverflow.com/questions/56879734/convert-a-state-into-a-publisher
 final class GithubSearchRequest: ObservableObject {
-    @Published var query: String = "" {
-        didSet { fetch() }
-    }
+    @Published var query: String = ""
     @Published var results = [String]()
     @Published var error: ErrorMessage? = nil
 
     var debounceDelay: Double
 
-    private var currentRequest: AnyCancellable? = nil
+    private var requestPipeline: AnyCancellable? = nil
 
     init(debounceDelay: Double = 0.5) {
         self.debounceDelay = debounceDelay
+        createRequestPipeline()
     }
 
-    private func fetch() {
-        self.error = nil
-        let req = $query
-            .print()
+    private func createRequestPipeline() {
+        requestPipeline = $query
+            .print("initial")
             .mapError { _ in SearchError.publisherError }
-            .removeDuplicates()
             .debounce(for: .seconds(debounceDelay), scheduler: RunLoop.main)
-            .flatMap(queryURL)
+            .removeDuplicates()
+            .compactMap(queryURL)
             .flatMap(dataTask)
             .receive(on: RunLoop.main)
-            .catch { err -> Just<SearchResult> in
+            .catch { [weak self] err -> Just<SearchResult> in
                 print("err: \(err)")
-                self.error = ErrorMessage(string: err.localizedDescription)
+                self?.error = ErrorMessage(string: err.localizedDescription)
                 return Just(SearchResult(totalCount: 0, incompleteResults: false, items: []))
             }
-            .sink(receiveValue: { value in
-                print(value)
-                self.results = value.items.map { $0.fullName }
+            .sink(receiveValue: { [weak self] value in
+                print("✅: \(value)")
+                self?.results = value.items.map { $0.fullName }
             })
-        currentRequest = req
     }
 }
 
